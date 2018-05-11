@@ -1,0 +1,8 @@
+[package]
+name = "resistor-calc"
+version = "0.1.0"
+authors = ["HarkonenBade <github@harkonen.net>"]
+
+[dependencies]
+itertools = "0.7.*"
+lazy_static = "1.0.*"
