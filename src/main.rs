@@ -1,10 +1,12 @@
 extern crate itertools;
 #[macro_use]
 extern crate lazy_static;
+extern crate meval;
 
 use itertools::Itertools;
 
 use std::fmt;
+use std::str::FromStr;
 
 const POWERS: &[f64] = &[1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6];
 
@@ -17,11 +19,12 @@ lazy_static! {
         1.0, 1.1, 1.2, 1.3, 1.5, 1.6, 1.8, 2.0, 2.2, 2.4, 2.7, 3.0, 3.3, 3.6, 3.9, 4.3, 4.7, 5.1,
         5.6, 6.2, 6.8, 7.5, 8.2, 9.1,
     ]);
+    static ref RNAMES: Vec<String> = (1..=100).map(|i| format!("R{}", i)).collect();
 }
 
 #[derive(Debug)]
 pub struct RSeries {
-    values: Box<[u64]>,
+    values: Box<[f64]>,
 }
 
 impl RSeries {
@@ -30,13 +33,13 @@ impl RSeries {
             values: series
                 .iter()
                 .cartesian_product(POWERS.iter())
-                .map(|(val, pow)| (val * pow) as u64)
-                .collect::<Vec<u64>>()
+                .map(|(val, pow)| val * pow)
+                .collect::<Vec<f64>>()
                 .into_boxed_slice(),
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = &u64> + Clone {
+    fn iter(&self) -> impl Iterator<Item = &f64> + Clone {
         self.values.iter()
     }
 
@@ -45,13 +48,23 @@ impl RSeries {
     }
 }
 
-fn _print_r(r: &u64) -> String {
-    if *r < 1000 {
-        format!("{}R", r)
-    } else if *r < 1000000 {
-        format!("{}K", r / 1000)
+fn _format_rval(r: f64, unit: &str) -> String {
+    let mut val = format!("{}", r);
+    if val.contains('.') {
+        val.replace(".", unit)
     } else {
-        format!("{}M", r / 1000000)
+        val.push_str(unit);
+        val
+    }
+}
+
+fn _print_r(r: &f64) -> String {
+    if *r < 1000.0 {
+        _format_rval(*r, "R")
+    } else if *r < 1_000_000.0 {
+        _format_rval(*r / 1000.0, "K")
+    } else {
+        _format_rval(*r / 1_000_000.0, "M")
     }
 }
 
@@ -60,26 +73,22 @@ fn _print_res(r: &(u64, RSet)) {
     println!("Error: {:.3}\nValues: {}", (r as f64) / 1e9, v);
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
-pub struct RSet(Box<[u64]>);
+#[derive(Debug)]
+pub struct RSet(Box<[f64]>);
 
 impl RSet {
     pub fn r(&self, idx: usize) -> f64 {
-        self.0[idx - 1] as f64
+        self.0[idx - 1]
     }
 
-    pub fn sum(&self) -> u64 {
+    pub fn sum(&self) -> f64 {
         self.0.iter().sum()
     }
 }
 
 impl fmt::Display for RSet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let sep = if f.alternate() {
-            "\n"
-        } else {
-            ", "
-        };
+        let sep = if f.alternate() { "\n" } else { ", " };
         write!(
             f,
             "{}",
@@ -127,24 +136,21 @@ impl RCalc {
     }
 
     pub fn combinations(&self) -> u128 {
-        self.rs
-            .iter()
-            .map(|r| r.len() as u128)
-            .fold(1_u128, |acc, i| acc * i)
+        self.rs.iter().map(|r| r.len() as u128).product()
     }
 
     pub fn calc(&self, f: impl Fn(&RSet) -> Option<f64>) -> Option<RRes> {
         let mut res: Vec<(u64, RSet)> = self.rs
             .iter()
-            .map(|r| r.iter().map(|v| *v))
+            .map(|r| r.iter().cloned())
             .multi_cartesian_product()
             .filter_map(|v| {
                 let rs = RSet(v.into_boxed_slice());
                 f(&rs).map(|err| ((err * 1e9).round() as u64, rs))
             })
             .collect();
-        res.sort();
-        if res.len() > 0 {
+        res.sort_by_key(|(err, _rs)| *err);
+        if !res.is_empty() {
             Some(RRes { res })
         } else {
             None
@@ -152,20 +158,125 @@ impl RCalc {
     }
 }
 
-fn main() {
-    let r = RCalc::new(vec![&E24, &E6, &E24]);
+enum Bounds {
+    Cmp(Box<Fn(f64, f64) -> bool>, meval::Expr, f64),
+    Err(meval::Expr, f64),
+}
 
-    println!("Number of combinations: {}", r.combinations());
+fn split_expr(expr: &str, pat: &str) -> (meval::Expr, f64) {
+    let mut split = expr.split(pat);
+    (
+        split.next().unwrap().trim().parse::<meval::Expr>().unwrap(),
+        split.next().unwrap().trim().parse::<f64>().unwrap(),
+    )
+}
 
-    let res = r.calc(|rs| {
-        if rs.sum() < 10000 || rs.sum() > 1000000 {
-            None
+impl FromStr for Bounds {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, <Self as FromStr>::Err> {
+        if s.contains("<=") {
+            let (ex, trg) = split_expr(s, "<=");
+            Ok(Bounds::Cmp(Box::new(|a, b| a <= b), ex, trg))
+        } else if s.contains('<') {
+            let (ex, trg) = split_expr(s, "<");
+            Ok(Bounds::Cmp(Box::new(|a, b| a < b), ex, trg))
+        } else if s.contains(">=") {
+            let (ex, trg) = split_expr(s, ">=");
+            Ok(Bounds::Cmp(Box::new(|a, b| a >= b), ex, trg))
+        } else if s.contains('>') {
+            let (ex, trg) = split_expr(s, ">");
+            Ok(Bounds::Cmp(Box::new(|a, b| a > b), ex, trg))
+        } else if s.contains("==") {
+            let (ex, trg) = split_expr(s, "==");
+            Ok(Bounds::Cmp(
+                Box::new(|a, b| (a - b).abs() < std::f64::EPSILON),
+                ex,
+                trg,
+            ))
+        } else if s.contains("!=") {
+            let (ex, trg) = split_expr(s, "!=");
+            Ok(Bounds::Cmp(
+                Box::new(|a, b| (a - b).abs() > std::f64::EPSILON),
+                ex,
+                trg,
+            ))
+        } else if s.contains('~') {
+            let (ex, trg) = split_expr(s, "~");
+            Ok(Bounds::Err(ex, trg))
         } else {
-            let six_err = (6.0 - (0.8 * (1.0 + rs.r(1) / rs.r(3)))).abs();
-            let twelve_err = (12.0 - (0.8 * (1.0 + (rs.r(1) + rs.r(2)) / rs.r(3)))).abs();
-            Some(six_err + twelve_err)
+            Err("Err: Bound must contain either <, <=, >, >=, ==, != or ~")
         }
-    }).expect("Error: No values satisfy requirements");
+    }
+}
+
+#[derive(Default)]
+pub struct ROpBuilder {
+    ops: Vec<Bounds>,
+}
+
+impl ROpBuilder {
+    pub fn new() -> Self {
+        ROpBuilder { ops: Vec::new() }
+    }
+
+    pub fn bound(mut self, expr: &str) -> Self {
+        self.ops.push(expr.parse().unwrap());
+        self
+    }
+
+    fn cmp_bound_fn(&mut self) -> Box<Fn(&meval::Context) -> Option<f64>> {
+        match self.ops.pop() {
+            Some(b) => match b {
+                Bounds::Cmp(op, expr, target) => {
+                    let inner_bound = self.cmp_bound_fn();
+                    Box::new(move |ctx| {
+                        if op(expr.eval_with_context(ctx).unwrap(), target) {
+                            inner_bound(ctx)
+                        } else {
+                            None
+                        }
+                    })
+                }
+                Bounds::Err(expr, target) => {
+                    let inner_bound = self.cmp_bound_fn();
+                    Box::new(move |ctx| {
+                        let val = expr.eval_with_context(ctx).unwrap();
+                        inner_bound(ctx).map(|v| v + (target - val).abs())
+                    })
+                }
+            },
+            None => Box::new(|_| Some(0.0)),
+        }
+    }
+
+    pub fn finish(mut self) -> impl Fn(&RSet) -> Option<f64> {
+        let bound = self.cmp_bound_fn();
+        move |rs: &RSet| {
+            let mut ctx = meval::Context::new();
+            for (i, v) in rs.0.iter().enumerate() {
+                ctx.var(RNAMES[i].clone(), *v as f64);
+            }
+            bound(&ctx)
+        }
+    }
+}
+
+fn main() {
+    let rcalc = RCalc::new(vec![&E24, &E6, &E24]);
+
+    println!("Number of combinations: {}", rcalc.combinations());
+
+    let res = rcalc
+        .calc(
+            ROpBuilder::new()
+                .bound("R1+R2+R3 <= 1e6")
+                .bound("R1+R2+R3 >= 1e4")
+                .bound("0.8 * (1 + R1/R3) ~ 6.0")
+                .bound("0.8 * (1 + (R1+R2)/R3) ~ 12.0")
+                .finish(),
+        )
+        .expect("Error: No values satisfy requirements");
 
     res.print_best();
 }
