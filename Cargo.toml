@@ -1,9 +1,18 @@
 [package]
 name = "resistor-calc"
 version = "0.1.0"
-authors = ["HarkonenBade <github@harkonen.net>"]
+authors = ["Thomas Bytheway <github@harkonen.net>"]
+description = "A rust library to calculate nearest resistor values for circuit design."
+documentation = "https://docs.rs/resistor-calc/"
+repository = "https://github.com/HarkonenBade/resistor-calc"
+readme = "README.md"
+license = "MIT"
+
+[features]
+default = ["expr_builder"]
+expr_builder = ["meval"]
 
 [dependencies]
 itertools = "0.7.*"
 lazy_static = "1.0.*"
-meval = "0.1.0"
+meval = { version = "0.1.0", optional = true }
