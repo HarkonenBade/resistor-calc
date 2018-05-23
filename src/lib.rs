@@ -94,7 +94,14 @@ pub struct RSeries {
 }
 
 impl RSeries {
-    fn new(series: &[f64]) -> Self {
+    /// Defines a new series of resistor values. Only the decade needs to be provided, multiples
+    /// upto Val * 1M will be generated automatically.
+    /// # Example
+    /// ```
+    ///     # use resistor_calc::*;
+    ///     let piher = RSeries::new(&[1.0, 2.0, 2.2, 2.5, 4.7, 5.0]);
+    /// ```
+    pub fn new(series: &[f64]) -> Self {
         RSeries {
             values: series
                 .iter()
@@ -231,11 +238,11 @@ impl RRes {
 
 /// Main calculator struct
 #[derive(Debug)]
-pub struct RCalc {
-    rs: Vec<&'static RSeries>,
+pub struct RCalc<'a> {
+    rs: Vec<&'a RSeries>,
 }
 
-impl RCalc {
+impl<'a> RCalc<'a> {
     /// Creates a new RCalc with the series used for the R values provided as a vec.
     /// # Examples
     /// To create a calculator that will vary over 4 resistors R1, R2, R3 and R4, where we want to
@@ -245,7 +252,7 @@ impl RCalc {
     ///     # use resistor_calc::*;
     ///     let rcal = RCalc::new(vec![&E24, &E24, &E6, &E12]);
     /// ```
-    pub fn new(rs: Vec<&'static RSeries>) -> Self {
+    pub fn new(rs: Vec<&'a RSeries>) -> Self {
         RCalc { rs }
     }
 
